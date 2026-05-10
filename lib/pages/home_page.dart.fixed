@@ -1,0 +1,877 @@
+?import 'package:flutter/material.dart';
+import 'package:animate_do/animate_do.dart';
+import 'package:shimmer/shimmer.dart';
+import '../config/design_tokens.dart';
+import '../constants/app_colors.dart';
+import '../services/auth_service.dart';
+import '../utils/app_routes.dart';
+import '../widgets/hero_section.dart';
+import '../widgets/featured_writers.dart';
+import '../widgets/news_reel_hero_carousel.dart';
+import 'search_page.dart';
+import 'profile_page.dart';
+import 'news_page.dart';
+import 'writer_registration_page.dart';
+import 'magazine_page.dart';
+import 'magazine_reader_page.dart';
+import 'writer_articles_feed_page.dart';
+import '../services/magazine_service.dart';
+import '../models/magazine_edition.dart';
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/notification_service.dart';
+import 'admin_dashboard_page.dart';
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int _currentIndex = 0;
+  final MagazineService _magazineService = MagazineService();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  MagazineEdition? _featuredMagazine;
+  bool _magazineLoading = true;
+  StreamSubscription<List<MagazineEdition>>? _magazineSub;
+  StreamSubscription<QuerySnapshot>? _notificationSub;
+  Map<String, dynamic>? _featuredArticles;
+
+  // GlobalKeys to trigger refresh() on child widget states
+  final GlobalKey<NewsReelHeroCarouselState> _reelKey =
+      GlobalKey<NewsReelHeroCarouselState>();
+  final GlobalKey<HeroSectionState> _heroKey = GlobalKey<HeroSectionState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadArticles();
+    _loadFeaturedMagazine();
+    // Request notification permission when home page loads
+    NotificationService().requestPermission();
+    _listenForInAppNotifications();
+  }
+
+  void _listenForInAppNotifications() {
+     final user = FirebaseAuth.instance.currentUser;
+     if (user == null) return;
+     
+     _notificationSub = FirebaseFirestore.instance
+         .collection('user_notifications')
+         .where('userId', isEqualTo: user.uid)
+         .where('isRead', isEqualTo: false)
+         .snapshots()
+         .listen((snapshot) {
+             if (!mounted) return;
+             for (var change in snapshot.docChanges) {
+                 if (change.type == DocumentChangeType.added) {
+                     final data = change.doc.data() as Map<String, dynamic>;
+                     // Mark as read immediately to prevent loop
+                     change.doc.reference.update({'isRead': true});
+                     
+                     // Show in-app alert
+                     showDialog(
+                         context: context,
+                         builder: (_) => AlertDialog(
+                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                             icon: const Icon(Icons.info_outline, color: AppColors.primaryRed, size: 48),
+                             title: Text(data['title'] ?? 'सूचना', style: const TextStyle(fontWeight: FontWeight.bold)),
+                             content: Text(data['body'] ?? '', textAlign: TextAlign.center),
+                             actions: [
+                                 TextButton(
+                                     onPressed: () => Navigator.pop(context),
+                                     child: const Text('ठीक है (OK)'),
+                                 ),
+                             ],
+                         ),
+                     );
+                 }
+             }
+         });
+  }
+
+  @override
+  void dispose() {
+    _magazineSub?.cancel();
+    _notificationSub?.cancel();
+    super.dispose();
+  }
+
+  void _loadFeaturedMagazine() {
+    _magazineSub = _magazineService.getMagazinesStream().listen((magazines) {
+      if (mounted) {
+        if (magazines.isNotEmpty) {
+          setState(() {
+            _featuredMagazine = magazines.first;
+            _magazineLoading = false;
+          });
+        } else {
+          setState(() {
+            _featuredMagazine = null;
+            _magazineLoading = false;
+          });
+        }
+      }
+    }, onError: (_) {
+      if (mounted) setState(() => _magazineLoading = false);
+    });
+  }
+
+  /// Refreshes all sections: reels, trending hero, and magazine stream.
+  Future<void> _refreshHomeData() async {
+    // Reload widget-owned sections via their GlobalKeys
+    await Future.wait([
+      _reelKey.currentState?.refresh() ?? Future.value(),
+      _heroKey.currentState?.refresh() ?? Future.value(),
+    ]);
+    // Magazine stream auto-updates via Firestore; reset loading so skeleton shows briefly
+    if (mounted) setState(() => _magazineLoading = true);
+    _magazineSub?.cancel();
+    _loadFeaturedMagazine();
+  }
+
+  Future<void> _loadArticles() async {
+    // Kept for potential future use — loading handled by child widgets
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const bool isDark = false;
+
+    return Scaffold(
+      backgroundColor: DesignTokens.scaffoldOn(isDark),
+      body: _AnimatedIndexedStack(
+        index: _currentIndex,
+        children: [
+          _buildEditorialHome(isDark),
+          const NewsPage(),
+          const WriterArticlesFeedPage(),
+          const MagazinePage(),
+          const ProfilePage(),
+        ],
+      ),
+      bottomNavigationBar: _buildBottomNav(isDark),
+    );
+  }
+
+  // ── Editorial Home Tab ────────────────────────────────────────────
+  Widget _buildEditorialHome(bool isDark) {
+    return RefreshIndicator(
+      onRefresh: _refreshHomeData,
+      color: AppColors.accentOrange,
+      child: CustomScrollView(
+        slivers: [
+          _buildAppBar(isDark),
+          _buildDateBand(isDark),
+
+          // News Reel Hero Section
+          SliverToBoxAdapter(
+            child: NewsReelHeroCarousel(key: _reelKey),
+          ),
+
+          // Hero Carousel (Top 5 Trending)
+          SliverToBoxAdapter(
+            child: HeroSection(key: _heroKey),
+          ),
+
+          const SliverToBoxAdapter(child: SizedBox(height: 20)),
+
+          // Featured Magazine (monthly) — skeleton while loading
+          if (_magazineLoading)
+            SliverToBoxAdapter(child: _buildMagazineSkeleton())
+          else if (_featuredMagazine != null)
+            SliverToBoxAdapter(child: _buildFeaturedMagazineCard(isDark)),
+
+          const SliverToBoxAdapter(child: SizedBox(height: 12)),
+
+          // Featured Writers (प्रमुख लेखक)
+          const SliverToBoxAdapter(child: FeaturedWriters()),
+
+          // Writers Feed Link
+          SliverToBoxAdapter(child: _buildWriterFeedSection(isDark)),
+
+          // Become a Writer CTA (only show if user is not a writer)
+          SliverToBoxAdapter(
+            child: StreamBuilder<User?>(
+              stream: FirebaseAuth.instance.authStateChanges(),
+              builder: (context, authSnapshot) {
+                final user = authSnapshot.data;
+                if (user == null) {
+                  return _buildWriterCTA(isDark); // Show if not logged in
+                }
+
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('writer_registrations')
+                      .where('uid', isEqualTo: user.uid)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const SizedBox.shrink();
+                    }
+                    
+                    return StreamBuilder<DocumentSnapshot>(
+                      stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+                      builder: (context, userSnapshot) {
+                        if (userSnapshot.connectionState == ConnectionState.waiting) {
+                          return const SizedBox.shrink();
+                        }
+                        
+                        final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
+                        final bool isAdmin = userData?['isAdmin'] == true || user.email == 'vivechanaoaj@gmail.com';
+                        
+                        final isWriter = snapshot.hasData && snapshot.data!.docs.isNotEmpty;
+                        if (!isWriter && !isAdmin) {
+                          return _buildWriterCTA(isDark);
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppBar(bool isDark) {
+    return SliverAppBar(
+      floating: true,
+      snap: true,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      toolbarHeight: 68,
+      backgroundColor: DesignTokens.scaffoldOn(isDark),
+      titleSpacing: 16,
+      title: FadeInLeft(
+        duration: const Duration(milliseconds: 500),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.accentOrange, width: 2),
+              ),
+              child: ClipOval(
+                child: Image.asset('assets/vivechana-oj-logo.png', fit: BoxFit.cover),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'विवेचना-ओज',
+                  style: TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    color: DesignTokens.textPrimaryOn(isDark),
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.home_rounded,
+                      size: 13,
+                      color: AppColors.accentOrange,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      'होम',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.accentOrange,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        // Admin Dashboard Button (Conditional)
+        StreamBuilder<User?>(
+          stream: AuthService().authStateChanges,
+          builder: (context, authSnapshot) {
+            final user = authSnapshot.data;
+            if (user == null) return const SizedBox.shrink();
+            
+            return StreamBuilder<DocumentSnapshot>(
+              stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+              builder: (context, userSnapshot) {
+                final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
+                // Allow access if isAdmin is true OR if it's the specific admin email
+                final bool isAdmin = userData?['isAdmin'] == true || user.email == 'vivechanaoaj@gmail.com';
+                
+                if (isAdmin) {
+                  return IconButton(
+                    icon: const Icon(Icons.admin_panel_settings, color: AppColors.primaryLight),
+                    tooltip: 'Admin Dashboard',
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (context) => const AdminDashboardPage(),
+                      ));
+                    },
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            );
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.notifications_active_outlined),
+          color: AppColors.primaryLight,
+          onPressed: () async {
+            ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(
+                content: Text('ताज़ा खबरों की जाँच की जा रही है...'),
+                duration: Duration(seconds: 1),
+               ),
+            );
+
+            final hasNew = await NotificationService().checkNewsNow();
+
+            if (mounted && !hasNew) {
+               ScaffoldMessenger.of(context).showSnackBar(
+                 const SnackBar(content: Text('अभी कोई नई खबर नहीं है।')),
+               );
+            }
+          },
+        ),
+        StreamBuilder<User?>(
+          stream: AuthService().authStateChanges,
+          builder: (context, snapshot) {
+            final user = snapshot.data;
+            return Padding(
+              padding: const EdgeInsets.only(right: 12.0),
+              child: GestureDetector(
+                onTap: () => setState(() => _currentIndex = 4),
+                child: CircleAvatar(
+                  radius: 17,
+                  backgroundColor: AppColors.primaryLight.withOpacity(0.15),
+                  backgroundImage: user?.photoURL != null
+                      ? NetworkImage(user!.photoURL!)
+                      : null,
+                  child: user?.photoURL == null
+                      ? Icon(Icons.person_outline, color: AppColors.primaryLight, size: 20)
+                      : null,
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDateBand(bool isDark) {
+    final now = DateTime.now();
+    final weekdays = ['सोम', 'मंगल', 'बुध', 'गुरु', 'शुक्र', 'शनि', 'रवि'];
+    final months = [
+      'जनवरी', 'फ़रवरी', 'मार्च', 'अप्रैल', 'मई', 'जून',
+      'जुलाई', 'अगस्त', 'सितंबर', 'अक्तूबर', 'नवंबर', 'दिसंबर'
+    ];
+    final dateStr = '${weekdays[now.weekday - 1]}, ${now.day} ${months[now.month - 1]} ${now.year}';
+
+    return SliverToBoxAdapter(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        color: DesignTokens.scaffoldOn(isDark),
+        child: Row(
+          children: [
+            Container(
+              width: 3,
+              height: 14,
+              decoration: BoxDecoration(
+                color: AppColors.accentOrange,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              dateStr,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: DesignTokens.textSecondaryOn(isDark),
+                letterSpacing: 0.2,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.primaryRed,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.circle, size: 6, color: Colors.white),
+                  SizedBox(width: 4),
+                  Text(
+                    'लाइव',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWriterFeedSection(bool isDark) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+      decoration: BoxDecoration(
+        color: DesignTokens.cardColorOn(isDark),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: DesignTokens.dividerOn(isDark)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () {
+            Navigator.push(
+              context,
+              AppRoutes.slideRight(const WriterArticlesFeedPage()),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.auto_stories, color: AppColors.primaryRed, size: 28),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'साहित्य जगत',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: DesignTokens.textPrimaryOn(isDark),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'रचनाकारों की कहानियाँ, कविताएँ व लेख पढ़ें',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: DesignTokens.textSecondaryOn(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: DesignTokens.textSecondaryOn(isDark)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }  Widget _buildWriterCTA(bool isDark) {
+    return GestureDetector(
+      onTap: () async {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null || user.isAnonymous) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('लेखक बनने के लिए कृपया पहले लॉगिन करें।')),
+          );
+          // Optional: Force them out of the guest session
+          // await AuthService().signOut(); 
+          return;
+        }
+        
+        Navigator.push(
+          context,
+          AppRoutes.slideUp(const WriterRegistrationPage()),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          gradient: AppColors.magazineGradient,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryRed.withOpacity(0.25),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'क्या आप भी लिखना चाहते हैं?',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'अपने विचार, लेख और कहानियाँ विवेचना-ओज के पाठकों तक पहुँचाएँ।',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.85),
+                fontSize: 13,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(30),
+              ),
+              child: const Text(
+                'लेखक बनें  →',
+                style: TextStyle(
+                  color: AppColors.primaryRed,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Bottom Navigation ─────────────────────────────────────────────
+  Widget _buildBottomNav(bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: DesignTokens.cardColorOn(isDark),
+        border: Border(
+          top: BorderSide(
+            color: DesignTokens.dividerOn(isDark),
+            width: 0.8,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.4 : 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: BottomNavigationBar(
+          currentIndex: _currentIndex,
+          onTap: (index) => setState(() => _currentIndex = index),
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          selectedItemColor: AppColors.primaryLight,
+          unselectedItemColor: DesignTokens.textSecondaryOn(isDark),
+          selectedLabelStyle: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+          ),
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home_rounded),
+              label: 'होम',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.newspaper_outlined),
+              activeIcon: Icon(Icons.newspaper_rounded),
+              label: 'न्यूज़',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.auto_stories_outlined),
+              activeIcon: Icon(Icons.auto_stories),
+              label: 'साहित्य',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.menu_book_outlined),
+              activeIcon: Icon(Icons.menu_book_rounded),
+              label: 'मैगज़ीन',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.person_outline_rounded),
+              activeIcon: Icon(Icons.person_rounded),
+              label: 'प्रोफ़ाइल',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeaturedMagazineCard(bool isDark) {
+    if (_featuredMagazine == null) return const SizedBox.shrink();
+
+    return GestureDetector(
+      onTap: () {
+        if (!_featuredMagazine!.isUploaded) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              icon: const Icon(Icons.hourglass_top_rounded, color: AppColors.accentOrange, size: 48),
+              title: const Text('जल्द आ रहा है!', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+              content: Text(
+                '${_featuredMagazine!.title} का अंक अभी अपलोड नहीं किया गया है। कृपया कुछ समय बाद पुनः प्रयास करें।',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, height: 1.5),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('ठीक है', style: TextStyle(color: AppColors.primaryRed, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MagazinePage()),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryDark.withOpacity(0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            children: [
+              // Background image (portrait)
+              Image.network(
+                _featuredMagazine!.coverUrl,
+                width: double.infinity,
+                height: 380,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: double.infinity,
+                  height: 380,
+                  color: AppColors.primaryDark,
+                  child: const Icon(Icons.book_rounded, color: Colors.white54, size: 60),
+                ),
+              ),
+              // Gradient overlay
+              Container(
+                width: double.infinity,
+                height: 380,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+                    stops: const [0.3, 1.0],
+                  ),
+                ),
+              ),
+              // Content
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentOrange,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'नवीनतम अंक',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _featuredMagazine!.title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _featuredMagazine!.subtitle,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -- Magazine skeleton � same height as the real card ---------------------
+  Widget _buildMagazineSkeleton() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey.shade300,
+      highlightColor: Colors.grey.shade100,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        height: 380,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Animated IndexedStack ───────────────────────────────────────────────
+/// Preserves state of ALL children (like IndexedStack) while
+/// animating the incoming tab with a fade + gentle scale-up.
+class _AnimatedIndexedStack extends StatefulWidget {
+  final int index;
+  final List<Widget> children;
+
+  const _AnimatedIndexedStack({
+    required this.index,
+    required this.children,
+  });
+
+  @override
+  State<_AnimatedIndexedStack> createState() => _AnimatedIndexedStackState();
+}
+
+class _AnimatedIndexedStackState extends State<_AnimatedIndexedStack>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacity;
+  late Animation<double> _scale;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.index;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
+    _opacity = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _scale = Tween<double>(begin: 0.96, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
+    );
+    _controller.forward(from: 1.0); // start complete — no animation on first load
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedIndexedStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      setState(() => _currentIndex = widget.index);
+      _controller.forward(from: 0); // animate in the new tab
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IndexedStack(
+      index: _currentIndex,
+      children: widget.children.asMap().entries.map((entry) {
+        final isActive = entry.key == _currentIndex;
+        return isActive
+            ? FadeTransition(
+                opacity: _opacity,
+                child: ScaleTransition(
+                  scale: _scale,
+                  alignment: Alignment.topCenter,
+                  child: entry.value,
+                ),
+              )
+            : entry.value;
+      }).toList(),
+    );
+  }
+}

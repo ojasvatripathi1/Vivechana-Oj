@@ -1,0 +1,257 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // HELPER FUNCTIONS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Returns true if the caller is authenticated.
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    /// Returns true if the caller is the owner of the given userId document.
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+
+    /// Returns true if the caller has the Firebase custom claim 'admin: true'.
+    /// Set via the setAdminClaim Cloud Function (functions/index.js).
+    /// Zero hidden Firestore reads — evaluated purely from the JWT token.
+    function isAdmin() {
+      return isAuth() && request.auth.token.get('admin', false) == true;
+    }
+
+    /// Returns true if the caller has the Firebase custom claim 'writer: true'.
+    /// Set via the setAdminClaim Cloud Function (extend as needed).
+    /// Zero hidden Firestore reads — evaluated purely from the JWT token.
+    function isWriter() {
+      return isAuth() && request.auth.token.get('writer', false) == true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GLOBAL READ — Authenticated users can read all documents.
+    // Write access is explicitly locked per collection below.
+    // ─────────────────────────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read: if isAuth();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // USERS COLLECTION
+    // ─────────────────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      // Any authenticated user can create their own doc (on signup).
+      // A user can update their own doc. Admins can update any user doc (e.g., grant/revoke isWriter).
+      // isAdmin and isWriter fields can ONLY be set by an admin.
+      allow create: if isOwner(userId) &&
+        request.resource.data.get('isAdmin', false) == false;
+
+      allow update: if (isOwner(userId) &&
+          // Regular users cannot self-promote to admin or writer
+          request.resource.data.get('isAdmin', false) == false &&
+          request.resource.data.get('isWriter', false) == resource.data.get('isWriter', false))
+        || isAdmin();
+
+      allow delete: if isOwner(userId) || isAdmin();
+
+      // Saved articles subcollection — only the owner can read/write.
+      match /saved_articles/{articleId} {
+        allow read, write: if isAuth() && isOwner(userId);
+      }
+
+      // Reading history subcollection — only the owner can read/write.
+      match /reading_history/{historyId} {
+        allow read, write: if isAuth() && isOwner(userId);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WRITER ARTICLES
+    // ─────────────────────────────────────────────────────────────────────────
+    match /writer_articles/{articleId} {
+      // Only approved writers can create articles attributed to themselves.
+      allow create: if isWriter() &&
+        request.resource.data.authorId == request.auth.uid;
+
+      // Writers can update their OWN articles (e.g., edit draft).
+      // Admins can update any article (e.g., approve/reject/status change).
+      allow update: if (isWriter() && resource.data.authorId == request.auth.uid) ||
+        isAdmin();
+
+      // Only admins can delete articles.
+      allow delete: if isAdmin();
+
+      // Likes subcollection — any authenticated user can write their own like doc (doc id = uid).
+      match /likes/{userId} {
+        allow read: if isAuth();
+        allow write, delete: if isAuth() && request.auth.uid == userId;
+      }
+
+      // Comments subcollection.
+      match /comments/{commentId} {
+        allow read: if isAuth();
+        allow create: if isAuth() && request.resource.data.authorId == request.auth.uid;
+        // Users can delete their own comment; admins can delete any.
+        allow delete: if isAuth() && (resource.data.authorId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NEWS ARTICLES (external RSS articles stored for likes/comments/saves)
+    // ─────────────────────────────────────────────────────────────────────────
+    match /news_articles/{articleId} {
+      // Any auth user can create or update the article doc (it's a shared cache).
+      allow create, update: if isAuth();
+      // Only admins can permanently delete a news article record.
+      allow delete: if isAdmin();
+
+      match /likes/{userId} {
+        allow read: if isAuth();
+        allow write, delete: if isAuth() && request.auth.uid == userId;
+      }
+
+      match /comments/{commentId} {
+        allow read: if isAuth();
+        allow create: if isAuth() && request.resource.data.authorId == request.auth.uid;
+        allow delete: if isAuth() && (resource.data.authorId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WRITER REGISTRATIONS
+    // ─────────────────────────────────────────────────────────────────────────
+    match /writer_registrations/{registrationId} {
+      // Any authenticated user can submit a registration for themselves.
+      allow create: if isAuth() && request.resource.data.uid == request.auth.uid;
+      // Only admins can approve/reject registrations.
+      allow update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NEWS REELS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /news_reels/{reelId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MAGAZINES — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /magazines/{magazineId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ANNOUNCEMENTS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /announcements/{announcementId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // USER NOTIFICATIONS — Personal, created by system/admin, read by owner
+    // ─────────────────────────────────────────────────────────────────────────
+    match /user_notifications/{notificationId} {
+      // Any authenticated user (or admin action) can create a notification.
+      allow create: if isAuth();
+      // Only the recipient can mark as read; admins can delete/update any.
+      allow update: if (isAuth() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow delete: if (isAuth() && resource.data.userId == request.auth.uid) || isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // COMMENT REPORTS — Users can file reports, admins manage them
+    // ─────────────────────────────────────────────────────────────────────────
+    match /comment_reports/{reportId} {
+      allow create: if isAuth();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BLOCKS — Users can block others (write own block docs)
+    // ─────────────────────────────────────────────────────────────────────────
+    match /blocks/{blockId} {
+      allow read: if isAuth();
+      // A user can only create/delete block docs where they are the blocker.
+      allow create: if isAuth() && request.resource.data.blockerId == request.auth.uid;
+      allow delete: if isAuth() && resource.data.blockerId == request.auth.uid;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ROOMS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /rooms/{roomId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // COMPLAINTS — Users raise, admins resolve
+    // ─────────────────────────────────────────────────────────────────────────
+    match /complaints/{complaintId} {
+      allow create: if isAuth() && request.resource.data.raisedBy == request.auth.uid;
+      allow read: if isAuth() && (resource.data.raisedBy == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ENGINEER TASKS — Admin-managed mirror of complaints
+    // ─────────────────────────────────────────────────────────────────────────
+    match /engineer_tasks/{taskId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MAINTENANCE PAYMENTS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /maintenance_payments/{paymentId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NOTICES — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /notices/{noticeId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VISITORS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /visitors/{visitorId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NOTIFICATIONS (legacy path) — owner-only
+    // ─────────────────────────────────────────────────────────────────────────
+    match /notifications/{userId}/{notificationId} {
+      allow read, write: if isAuth() && request.auth.uid == userId;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SETTINGS — Admin-managed
+    // ─────────────────────────────────────────────────────────────────────────
+    match /settings/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // APP CONFIG — Force update settings (read by all auth, write by admin only)
+    // ─────────────────────────────────────────────────────────────────────────
+    match /app_config/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+  }
+}

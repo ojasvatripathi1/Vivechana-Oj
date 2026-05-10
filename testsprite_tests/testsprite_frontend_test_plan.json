@@ -1,0 +1,218 @@
+[
+  {
+    "id": "TC001",
+    "title": "Sign in with email and password to reach home feed",
+    "description": "Verifies an authenticated reader can sign in with email/password and land on the home feed.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the home feed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC002",
+    "title": "Browse home feed and open an article",
+    "description": "Verifies an authenticated reader can scroll the home feed and open an article to view its full content in article detail.",
+    "category": "News Reading",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Scroll through the home feed article list"
+      },
+      {
+        "type": "action",
+        "description": "Click an article from the list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify full article content is displayed on the article detail screen"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC003",
+    "title": "Complete onboarding and reach login",
+    "description": "Verifies a new reader can progress through onboarding slides and finish onboarding to reach the login screen.",
+    "category": "Onboarding",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /onboarding"
+      },
+      {
+        "type": "action",
+        "description": "Click the control to advance to the next onboarding slide"
+      },
+      {
+        "type": "action",
+        "description": "Click the control to advance to the next onboarding slide"
+      },
+      {
+        "type": "action",
+        "description": "Click the control to finish onboarding"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the login screen"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC004",
+    "title": "Required-field validation on login",
+    "description": "Verifies submitting the login form with a required field empty shows a validation error and does not navigate away.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Fill  into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a required-field validation error is visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC005",
+    "title": "Skip onboarding and reach login",
+    "description": "Verifies a new reader can skip onboarding and is redirected to the login screen.",
+    "category": "Onboarding",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /onboarding"
+      },
+      {
+        "type": "action",
+        "description": "Click the control to skip onboarding"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the login screen"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC006",
+    "title": "Access control redirects logged-out user from home to login",
+    "description": "Verifies attempting to access the authenticated home route while logged out redirects the reader to the login screen.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the login screen"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC007",
+    "title": "Article detail provides a stable back path to home",
+    "description": "Verifies that after opening an article from the home feed, the user can return to the home feed using in-app navigation without losing the feed context.",
+    "category": "News Reading",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Click an article from the home feed list"
+      },
+      {
+        "type": "action",
+        "description": "Click the in-app control to go back"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user is back on the home feed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC008",
+    "title": "Article detail is viewable from direct navigation",
+    "description": "Verifies a reader can navigate directly to the article detail route and see article detail content without being blocked by authentication UI.",
+    "category": "News Reading",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /article_detail"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the article detail screen is displayed"
+      }
+    ],
+    "priority": "Medium"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "status": "init",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:8080/",
+  "loginUser": "vivechanaoj-frontend-testing1",
+  "loginPassword": "Ansh1234",
+  "executionArgs": {
+    "projectName": "vivechanaojapp",
+    "projectPath": "c:\\Users\\ojasv\\Desktop\\vivechanaojapp",
+    "testIds": [],
+    "additionalInstruction": "",
+    "serverMode": "development",
+    "envs": {
+      "API_KEY": "sk-user-I31aVTun87XXDMWY5pK3LKxuO2nYxxzVduEl7l8vovkPj3pAGcZP2d9qfzW-d-ohNGaorWlWQDV2i0SZAVQBOzGRcYonAGkPd3kwmR6tGFfQ16h_aPuYQRyL0NBJ3XDx_XY"
+    }
+  },
+  "serverPort": 58986
+}
